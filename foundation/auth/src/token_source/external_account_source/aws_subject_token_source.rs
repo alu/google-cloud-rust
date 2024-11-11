@@ -54,7 +54,12 @@ impl AWSSubjectTokenSource {
             None
         };
 
-        let credentials = get_security_credentials(&aws_session_token, &value.url).await?;
+        let credentials =
+            if let Some(credentials_relative_uri) = std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").ok() {
+                get_security_credentials_on_ecs(&credentials_relative_uri).await?
+            } else {
+                get_security_credentials(&aws_session_token, &value.url).await?
+            };
         let region = get_region(&aws_session_token, &value.region_url).await?;
 
         let url = value
@@ -282,6 +287,17 @@ async fn get_security_credentials(
     }
     let cred: AWSSecurityCredentials = response.json().await?;
     Ok(cred)
+}
+
+async fn get_security_credentials_on_ecs(credentials_relative_uri: &str) -> Result<AWSSecurityCredentials, Error> {
+    let client = default_http_client();
+    let builder = client.get(format!("http://169.254.170.2{credentials_relative_uri}"));
+    let response = builder.send().await?;
+    if !response.status().is_success() {
+        return Err(Error::UnexpectedStatusOnGetCredentials(response.status().as_u16()));
+    }
+
+    response.json().await.map_err(Error::from)
 }
 
 async fn get_region(temporary_session_token: &Option<String>, url: &Option<String>) -> Result<String, Error> {
